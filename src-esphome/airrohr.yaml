@@ -23,8 +23,8 @@
 # registration after reflashing. See "Device identity" below.
 
 substitutions:
-  device_name: airrohr
-  friendly_name: airRohr
+  device_name: airrohr-esphome
+  friendly_name: AirRohr-ESPHome
 
   # --- what the original firmware exposed on its /config page ---------------
   # Interval between sends, and the SDS011 duty cycle inside it (docs §4).
