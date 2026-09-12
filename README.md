@@ -4,10 +4,15 @@ An [ESPHome](https://esphome.io) port of the
 [airRohr firmware](https://github.com/opendata-stuttgart/sensors-software) — the Arduino firmware
 behind the [Sensor.Community](https://sensor.community) citizen air-quality network.
 
-The goal is that **the network cannot tell the difference**. The device reports the same values, in
-the same payload format, under the same sensor identity as the original firmware — while WiFi
-provisioning, OTA updates, logging, configuration and the local UI are handed to ESPHome instead of
-being reimplemented.
+My motivation for doing the port was wanting an easier way to update the firmware (ESPHome is great
+for this) and I was having problems with the AirRohr sensor not playing nicely with the 802.11kv
+features on my home wifi network. Claude is also really good at rewriting and porting code, so
+Claude Code greatly reduced the friction of getting this work done.
+
+The goal for the port is that **the sensor data logger APIs cannot tell the difference**.
+The device reports the same values, in the same payload format, under the same sensor identity
+as the original firmware - while WiFi provisioning, OTA updates, logging, configuration and
+the local UI are handed to ESPHome instead of being reimplemented.
 
 ## Target hardware
 
