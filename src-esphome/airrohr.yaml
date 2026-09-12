@@ -437,9 +437,12 @@ script:
           url: ${sc_url}
           request_headers:
             Content-Type: application/json
-            X-Sensor: !lambda 'return esphome::str_sprintf("esp8266-%u", ESP.getChipId());'
-            X-MAC-ID: !lambda 'return "esp8266-" + esphome::get_mac_address();'
-            X-PIN: !lambda 'return pin;'
+            X-Sensor: !lambda 'static const std::string s = esphome::str_sprintf("esp8266-%u", ESP.getChipId()); return s.c_str();'
+            X-MAC-ID: !lambda 'static const std::string s = "esp8266-" + esphome::get_mac_address(); return s.c_str();'
+            # Header values are const char*, so the string has to be owned
+            # somewhere that outlives the lambda. The POST is issued
+            # synchronously within this action, so a static is safe.
+            X-PIN: !lambda 'static std::string s; s = pin; return s.c_str();'
           body: !lambda 'return payload;'
           on_response:
             then:
@@ -485,8 +488,8 @@ script:
                 url: ${madavi_url}
                 request_headers:
                   Content-Type: application/json
-                  X-Sensor: !lambda 'return esphome::str_sprintf("esp8266-%u", ESP.getChipId());'
-                  X-MAC-ID: !lambda 'return "esp8266-" + esphome::get_mac_address();'
+                  X-Sensor: !lambda 'static const std::string s = esphome::str_sprintf("esp8266-%u", ESP.getChipId()); return s.c_str();'
+                  X-MAC-ID: !lambda 'static const std::string s = "esp8266-" + esphome::get_mac_address(); return s.c_str();'
                 body: !lambda 'return id(payload_combined);'
                 on_response:
                   then:

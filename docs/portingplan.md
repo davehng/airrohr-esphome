@@ -1,10 +1,11 @@
 # Plan: ESPHome port of airrohr-firmware → `src-esphome/airrohr.yaml`
 
-> **Status: implemented.** The port is in [../src-esphome/airrohr.yaml](../src-esphome/airrohr.yaml),
-> with [../src-esphome/secrets.yaml.example](../src-esphome/secrets.yaml.example) alongside it. It has
-> **not** been validated with `esphome config` or `esphome compile` — see
-> [Implementation notes](#implementation-notes) for what changed during the build and what is still
-> unverified.
+> **Status: implemented and compiling.** The port is in
+> [../src-esphome/airrohr.yaml](../src-esphome/airrohr.yaml), with
+> [../src-esphome/secrets.yaml.example](../src-esphome/secrets.yaml.example) alongside it.
+> `esphome compile` succeeds. It has **not yet been run on hardware** — see
+> [Verification](#verification) for what remains, and
+> [Implementation notes](#implementation-notes) for what changed during the build.
 
 ## Context
 
@@ -123,11 +124,15 @@ sensor.community request shape lives in exactly one place:
     url: ${sc_url}
     request_headers:
       Content-Type: application/json
-      X-Sensor: !lambda 'return esphome::str_sprintf("esp8266-%u", ESP.getChipId());'
-      X-MAC-ID: !lambda 'return "esp8266-" + esphome::get_mac_address();'
-      X-PIN: !lambda 'return pin;'
+      X-Sensor: !lambda 'static const std::string s = esphome::str_sprintf("esp8266-%u", ESP.getChipId()); return s.c_str();'
+      X-MAC-ID: !lambda 'static const std::string s = "esp8266-" + esphome::get_mac_address(); return s.c_str();'
+      X-PIN: !lambda 'static std::string s; s = pin; return s.c_str();'
     body: !lambda 'return payload;'
 ```
+
+Header lambdas must return `const char *` — `request_headers` is a
+`TemplatableValue<const char *>`, unlike `body`, which takes a `std::string`. The statics own the
+storage; the POST is issued synchronously within the action, so the pointers stay valid.
 
 `ESP.getChipId()` is the low 24 bits of the MAC — byte-identical to what the original firmware sends,
 which is what preserves the existing sensor.community registration.
@@ -176,7 +181,13 @@ Deviations from the plan as written, decided while building:
 - **User-Agent differs.** airRohr sends `version/chipid/macid`; the port sends just the version
   string. Identification is via `X-Sensor`, which matches exactly.
 
-Three defects were found and fixed during a read-back of the generated file:
+Found on the first `esphome compile` and fixed:
+
+- **`request_headers` lambdas must return `const char *`**, not `std::string` — five lambdas failed
+  to convert. Each now holds its value in a function-local `static std::string` and returns
+  `.c_str()`. `body:` is unaffected; it is templatable as `std::string`.
+
+Three further defects were found and fixed during a read-back of the generated file:
 
 1. The `on_response` lambda referenced a script parameter. Triggers get their own parameter pack, so
    `pin` is not in scope there — this would have failed to compile.
@@ -186,13 +197,12 @@ Three defects were found and fixed during a read-back of the generated file:
 
 ## Verification
 
-**None of the following has been run** — ESPHome is not installed in the development environment, and
-validation was deferred to the user's own ESPHome install. Steps 1 and 2 in particular are expected to
-surface lambda compile errors.
+Steps 1 and 2 **pass**. Steps 3 onward are outstanding — nothing has run on hardware yet.
 
-1. `esphome config src-esphome/airrohr.yaml` — substitutions and schema resolve.
-2. `esphome compile src-esphome/airrohr.yaml` — compiles the lambdas; record flash/RAM usage against
-   the risk above.
+1. ~~`esphome config src-esphome/airrohr.yaml`~~ — done, schema and substitutions resolve.
+2. ~~`esphome compile src-esphome/airrohr.yaml`~~ — done, builds clean. Flash/RAM usage against the
+   budget in Risks above has not been recorded; worth noting from the build output before adding
+   anything to the config.
 3. **Dry run before touching the live API.** Point the `sc_url`/`madavi_url` substitutions at a
    local listener (`python -m http.server` or `nc -l`) and confirm on the wire: two separate POSTs
    with the right `X-PIN`, stripped keys, two-decimal string values, `X-Sensor` matching the chip ID
