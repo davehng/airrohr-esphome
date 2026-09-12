@@ -56,6 +56,7 @@ upload targets; this port deliberately covers one configuration well rather than
 | [`src-original/`](src-original/) | The upstream `sensors-software` repository, as a git submodule — reference only, never modified |
 | [`docs/airrohr.md`](docs/airrohr.md) | What the original firmware does — measurement cycle, payload formats, configuration, OTA |
 | [`docs/portingplan.md`](docs/portingplan.md) | How the port was designed, what changed during implementation, and how to verify it |
+| [`docs/lessonslearned.md`](docs/lessonslearned.md) | What this port taught us — framework gotchas, what counts as evidence, where the documentation drifted |
 
 ## Getting started
 
