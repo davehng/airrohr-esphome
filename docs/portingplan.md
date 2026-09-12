@@ -98,15 +98,13 @@ An `interval: ${sending_interval_s}s` runs one `script` (`mode: single`), which 
 ```text
 clear sample vectors, collecting = false
 uart.write  Start frame                 → fan on
-delay warm-up                           → frames arrive and are ignored
-          (${first_warmup_time_s}s on the first cycle after a boot,
-           ${warmup_time_s}s thereafter)
+delay ${warmup_time_s}s                 → frames arrive and are ignored
 collecting = true
 delay ${reading_time_s}s                → frames accumulate
 collecting = false
 uart.write  Stop frame                  → fan off
 lambda: trimmed mean → publish SDS_P1 / SDS_P2, build payloads
-script.execute: upload_all
+script.execute: upload_all               → per-sensor: empty payloads skipped
 ```
 
 Trimmed mean, mirroring [:3527-3536](../src-original/airrohr-firmware/airrohr-firmware.ino#L3527-L3536):
@@ -195,12 +193,18 @@ Observed on hardware, not defects:
   against a LAN listener and **2447 ms against the live endpoints** — three sequential internet round
   trips. Worst case is the 10 s timeout per request, so roughly 30 s if all three hang. This is the same blocking behaviour the original firmware has, and it happens after the
   fan is already off, so nothing time-critical is affected — but the warning is permanent.
-- **The first cycles after a cold start reported `samples: 0`**, then self-corrected. The SDS011 does
-  not produce usable readings until it has run for a while from cold, and the normal 15 s warm-up is
-  not enough for that. Addressed with a `first_warmup_time_s` substitution (default 300 s) applied to
-  the first cycle after each boot only, gated by a non-restored `first_cycle` global. Note that this
-  cycle overruns the 145 s send interval, so the intervening `interval:` firings are dropped by
-  `mode: single` and the first two or three sends after a reboot are skipped.
+- **ESPHome fires the first `interval:` within 5 s of boot, not after a full interval.**
+  `Scheduler::set_interval` offsets the first execution by `min(interval/2, 5s)` chosen at random, to
+  avoid a thundering herd. So the first measurement cycle begins almost immediately after power-on —
+  exactly when the SDS011 is coldest — rather than 145 s in. This is why cold starts reliably produce
+  empty cycles, and why the skip-on-no-samples behaviour below is structural rather than cosmetic.
+- **The first cycles after a cold start reported `samples: 0`**, then self-corrected. The SDS011 needs
+  several minutes of running before it returns usable readings, which no per-cycle warm-up of a
+  sensible length can cover. Rather than lengthen the warm-up, sensors are kept **independent**: a
+  cycle with no PM samples omits the `X-PIN: 1` request and the `SDS_*` keys, while the BME280
+  request and the madavi payload go out as usual. This matches the original firmware, which drops a
+  failed sensor's keys but keeps sending the rest, and it means a dead PM sensor never silences the
+  weather data. A `no SDS011 samples this cycle` warning marks those cycles in the log.
 
 Found on first contact with hardware and fixed:
 

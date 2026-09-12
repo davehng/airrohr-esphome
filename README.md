@@ -30,8 +30,10 @@ upload targets; this port deliberately covers one configuration well rather than
   (1 for the SDS011, 11 for the BME280), values as JSON strings with two decimals.
 - **SDS011 duty cycling.** The fan is stopped between cycles and started 20 s before each send —
   15 s warm-up, then a 5 s collection window — using the original's own command frames. This is what
-  keeps the laser's service life, and it is what the network's data expects. The first cycle after a
-  boot warms up for 5 minutes instead, since the sensor returns nothing usable from cold.
+  keeps the laser's service life, and it is what the network's data expects.
+- **Independent sensors.** A sensor with no reading this cycle is omitted from the payload rather
+  than sent as a placeholder, and it does not hold up the others — so while the SDS011 warms up after
+  a boot, the BME280 keeps reporting.
 - **Trimmed averaging.** The lowest and highest sample of each cycle are discarded before averaging.
 - **Temperature correction** as a configurable offset, applied to temperature only.
 
