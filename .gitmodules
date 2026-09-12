@@ -1,0 +1,3 @@
+[submodule "src-original"]
+	path = src-original
+	url = https://github.com/opendata-stuttgart/sensors-software.git

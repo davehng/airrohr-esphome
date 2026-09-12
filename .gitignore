@@ -1,0 +1,6 @@
+# Real credentials — only secrets.yaml.example belongs in the repository.
+secrets.yaml
+
+# ESPHome build output
+.esphome/
+*.bin

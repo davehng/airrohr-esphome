@@ -50,19 +50,29 @@ upload targets; this port deliberately covers one configuration well rather than
 | Path | Contents |
 | --- | --- |
 | [`src-esphome/`](src-esphome/) | The port: `airrohr.yaml` and a `secrets.yaml.example` template |
-| [`src-original/`](src-original/) | Unmodified checkout of the upstream `sensors-software` repository, for reference |
+| [`src-original/`](src-original/) | The upstream `sensors-software` repository, as a git submodule — reference only, never modified |
 | [`docs/airrohr.md`](docs/airrohr.md) | What the original firmware does — measurement cycle, payload formats, configuration, OTA |
 | [`docs/portingplan.md`](docs/portingplan.md) | How the port was designed, what changed during implementation, and how to verify it |
 
 ## Getting started
 
 ```sh
-cd src-esphome
+git clone --recurse-submodules https://github.com/davehng/airrohr-esphome.git
+cd airrohr-esphome/src-esphome
 cp secrets.yaml.example secrets.yaml   # then fill in your WiFi and keys
 esphome run airrohr.yaml
 ```
 
 Requires ESPHome 2024.8 or newer.
+
+`secrets.yaml` is gitignored — only the template is tracked.
+
+The original firmware in `src-original/` is a submodule, and is needed only if you want to read the
+sources the port is based on. If you cloned without `--recurse-submodules`, fetch it with:
+
+```sh
+git submodule update --init
+```
 
 **Before publishing to the live API**, leave both `Publish to …` switches off and check the logs for
 a few cycles: each should report roughly five SDS011 samples. `docs/portingplan.md` describes a dry
