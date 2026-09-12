@@ -152,9 +152,13 @@ Combined payload also carries `samples` (SDS sample count this cycle), `interval
 
 ## Risks and how the file handles them
 
-- **Flash budget.** `api` + `web_server` + `http_request` on a 1 MB app partition is the tightest
-  constraint. If the build overflows, the documented fallback order is: `web_server` → `version: 1`,
-  then drop `captive_portal`.
+- **Flash budget — measured, not a problem.** `api` + `web_server` + `http_request` all fit
+  comfortably: **530 049 of 1 044 464 bytes (50.7%)**, against the original firmware's 67.1%
+  ([airrohr-firmware.ino:52-53](../src-original/airrohr-firmware/airrohr-firmware.ino#L52-L53)).
+  The planned fallback (`web_server` → `version: 1`, then dropping `captive_portal`) is not needed.
+- **RAM.** 37 344 of 81 920 bytes static (45.6%), against the original's 41.8%. That leaves ~44 KB of
+  heap for `web_server`, `api` and `http_request` at runtime — adequate, and helped by the TLS stack
+  being compiled out, but free heap is worth watching in the logs during the first long run.
 - **Blocking POSTs.** `http_request` is synchronous; three POSTs at up to 10 s each sit inside the
   script. Same behaviour as airRohr, and it happens while the fan is already off.
 - **Software UART glitches** at 9600 — inherent to the pin choice and identical to airRohr, which
@@ -200,9 +204,8 @@ Three further defects were found and fixed during a read-back of the generated f
 Steps 1 and 2 **pass**. Steps 3 onward are outstanding — nothing has run on hardware yet.
 
 1. ~~`esphome config src-esphome/airrohr.yaml`~~ — done, schema and substitutions resolve.
-2. ~~`esphome compile src-esphome/airrohr.yaml`~~ — done, builds clean. Flash/RAM usage against the
-   budget in Risks above has not been recorded; worth noting from the build output before adding
-   anything to the config.
+2. ~~`esphome compile src-esphome/airrohr.yaml`~~ — done, builds clean at 50.7% flash / 45.6% RAM.
+   See Risks above.
 3. **Dry run before touching the live API.** Point the `sc_url`/`madavi_url` substitutions at a
    local listener (`python -m http.server` or `nc -l`) and confirm on the wire: two separate POSTs
    with the right `X-PIN`, stripped keys, two-decimal string values, `X-Sensor` matching the chip ID
