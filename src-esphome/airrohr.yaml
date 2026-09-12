@@ -1,0 +1,494 @@
+# airRohr — ESPHome port
+#
+# Target hardware: NodeMCU v2/v3 (ESP8266) + Nova SDS011 + Bosch BME280, no display.
+# Behaviour is documented in ../docs/airrohr.md; section references below point there.
+#
+# Wiring (identical to the original firmware):
+#   SDS011 TX -> D1 / GPIO5      SDS011 RX -> D2 / GPIO4      SDS011 5V -> VU
+#   BME280 SDA -> D3 / GPIO0     BME280 SCL -> D4 / GPIO2     BME280 VCC -> 3V3
+#
+# NOTE: GPIO0 and GPIO2 are ESP8266 boot-strapping pins and must be HIGH at boot.
+# An idle I2C bus with pull-ups holds them high, but a shorted or mis-wired bus
+# will stop the board from booting.
+#
+# Requires ESPHome 2024.8 or newer: `ota:` as a list of platforms, and the
+# `request_headers:` key on http_request actions (renamed from `headers:`).
+#
+# secrets.yaml must provide:
+#   wifi_ssid, wifi_password, ap_password, ota_password, api_encryption_key
+# Copy secrets.yaml.example to secrets.yaml and fill it in.
+#
+# The device reports to sensor.community under the SAME id as the original
+# firmware (esp8266-<chipid>), so an already-registered sensor keeps its
+# registration after reflashing. See "Device identity" below.
+
+substitutions:
+  device_name: airrohr
+  friendly_name: airRohr
+
+  # --- what the original firmware exposed on its /config page ---------------
+  # Interval between sends, and the SDS011 duty cycle inside it (docs §4).
+  # Expressed in whole seconds so one value drives both the timer and the
+  # payload's "interval" field.
+  sending_interval_s: "145"
+  warmup_time_s: "15"
+  reading_time_s: "5"
+
+  # Added to the BME280 temperature only, exactly as airRohr's temp_correction.
+  temp_offset: "0.0"
+  # Metres above sea level, for the local-only barometric reduction.
+  height_above_sealevel: "0.0"
+
+  # Free-form string sent in every payload as "software_version".
+  software_version: "airrohr-esphome-0.1"
+
+  # --- upload targets (plain HTTP port 80, as airRohr defaults to) ----------
+  sc_url: "http://api.sensor.community/v1/push-sensor-data/"
+  madavi_url: "http://api-rrd.madavi.de/data.php"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    # Runs after the UART is up. Mirrors powerOnTestSensors(): put the sensor in
+    # continuous active reporting, then stop the fan until the first cycle.
+    - priority: -100
+      then:
+        - script.execute: sds_set_continuous
+        - delay: 200ms
+        - script.execute: sds_set_report_active
+        - delay: 200ms
+        - script.execute: sds_stop
+
+esp8266:
+  board: nodemcuv2
+  # Required for the upload switches below to survive a power cycle.
+  restore_from_flash: true
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Replaces airRohr's hand-rolled AP config mode (docs §7).
+  ap:
+    ssid: ${friendly_name} Setup
+    password: !secret ap_password
+
+captive_portal:
+
+logger:
+  # UART0 (GPIO1/GPIO3) — no conflict with the software UART on GPIO5/GPIO4.
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# Local read-only surface, standing in for airRohr's /values and /status.
+# If the build overflows flash, drop this to `version: 1` before removing
+# anything else.
+web_server:
+  port: 80
+  version: 3
+
+http_request:
+  id: http_client
+  useragent: ${software_version}
+  timeout: 10s
+  # Both endpoints are plain HTTP, so the TLS stack is dead weight on ESP8266.
+  esp8266_disable_ssl_support: true
+
+i2c:
+  id: bus_i2c
+  sda: GPIO0
+  scl: GPIO2
+  scan: true
+
+uart:
+  id: sds_uart
+  rx_pin: GPIO5
+  tx_pin: GPIO4
+  baud_rate: 9600
+  # Not hardware-UART pins, so ESPHome uses its ESP8266 software UART — the same
+  # arrangement the original firmware uses (SoftwareSerial).
+
+globals:
+  # Samples collected during the 5 s reading window (docs §4).
+  - id: pm25_samples
+    type: std::vector<float>
+    restore_value: false
+  - id: pm10_samples
+    type: std::vector<float>
+    restore_value: false
+  # Gate: raw SDS011 frames are only accumulated while this is true.
+  - id: collecting
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: last_sample_count
+    type: int
+    restore_value: false
+    initial_value: "0"
+  # Payloads staged by the cycle script and posted by upload_all.
+  - id: payload_sc_pm
+    type: std::string
+    restore_value: false
+  - id: payload_sc_bme
+    type: std::string
+    restore_value: false
+  - id: payload_combined
+    type: std::string
+    restore_value: false
+
+sensor:
+  # --- SDS011 ---------------------------------------------------------------
+  # Used purely as a frame parser. Its default update_interval (0 min) puts the
+  # sensor in continuous reporting, ~1 frame/s; start/stop is driven by the
+  # cycle script, not by this component.
+  - platform: sds011
+    id: sds011_dev
+    uart_id: sds_uart
+    pm_2_5:
+      id: sds_pm25_raw
+      internal: true
+      on_value:
+        then:
+          - lambda: |-
+              if (id(collecting)) id(pm25_samples).push_back(x);
+    pm_10_0:
+      id: sds_pm10_raw
+      internal: true
+      on_value:
+        then:
+          - lambda: |-
+              if (id(collecting)) id(pm10_samples).push_back(x);
+
+  # Published PM values: one trimmed average per cycle.
+  - platform: template
+    id: sds_p1
+    name: "PM10"
+    unit_of_measurement: "µg/m³"
+    device_class: pm10
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: never
+  - platform: template
+    id: sds_p2
+    name: "PM2.5"
+    unit_of_measurement: "µg/m³"
+    device_class: pm25
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: never
+
+  # --- BME280 ---------------------------------------------------------------
+  # A normal polled sensor (docs Appendix B). Forced-mode one-shot reads with
+  # 1x oversampling and no IIR filter match airRohr's setSampling().
+  - platform: bme280_i2c
+    i2c_id: bus_i2c
+    address: 0x77
+    update_interval: 60s
+    iir_filter: "OFF"
+    temperature:
+      id: bme_temperature
+      name: "Temperature"
+      oversampling: 1x
+      # airRohr's temp_correction: temperature only, never humidity or pressure.
+      filters:
+        - offset: ${temp_offset}
+    pressure:
+      id: bme_pressure
+      name: "Pressure"
+      oversampling: 1x
+    humidity:
+      id: bme_humidity
+      name: "Humidity"
+      oversampling: 1x
+
+  # --- local-only derived values (never uploaded; docs §4) -------------------
+  - platform: template
+    id: dew_point
+    name: "Dew point"
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 60s
+    lambda: |-
+      const float t = id(bme_temperature).state;
+      const float h = id(bme_humidity).state;
+      if (std::isnan(t) || std::isnan(h) || h <= 0.0f)
+        return {};
+      const float k2 = 17.62f;
+      const float k3 = 243.12f;
+      const float lr = logf(h / 100.0f);
+      return k3 * (((k2 * t) / (k3 + t)) + lr) / (((k2 * k3) / (k3 + t)) - lr);
+
+  - platform: template
+    id: pressure_at_sealevel
+    name: "Pressure at sea level"
+    unit_of_measurement: "hPa"
+    device_class: atmospheric_pressure
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 60s
+    lambda: |-
+      const float t = id(bme_temperature).state;
+      const float p = id(bme_pressure).state;  // hPa
+      if (std::isnan(t) || std::isnan(p))
+        return {};
+      const float h = ${height_above_sealevel};
+      return p * powf((t + 273.15f) / (t + 273.15f + (0.0065f * h)), -5.255f);
+
+  # --- diagnostics, standing in for /status ---------------------------------
+  - platform: wifi_signal
+    id: wifi_rssi
+    name: "WiFi signal"
+    update_interval: 60s
+    entity_category: diagnostic
+  - platform: uptime
+    name: "Uptime"
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: version
+    name: "ESPHome version"
+    entity_category: diagnostic
+  # Device identity: ESP.getChipId() is the low 24 bits of the MAC, which is
+  # exactly what the original firmware puts in X-Sensor.
+  - platform: template
+    id: sensor_community_id
+    name: "Sensor ID"
+    entity_category: diagnostic
+    update_interval: 300s
+    lambda: |-
+      return {esphome::str_sprintf("esp8266-%u", ESP.getChipId())};
+
+switch:
+  # Independent per-target toggles. Both default on, and survive a reboot.
+  - platform: template
+    id: publish_sensor_community
+    name: "Publish to sensor.community"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+  - platform: template
+    id: publish_madavi
+    name: "Publish to madavi.de"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+
+button:
+  # Handy when testing: run a full cycle now instead of waiting out the interval.
+  - platform: template
+    name: "Measure now"
+    entity_category: config
+    on_press:
+      - script.execute: measure_cycle
+
+interval:
+  - interval: ${sending_interval_s}s
+    then:
+      - script.execute: measure_cycle
+
+script:
+  # --- SDS011 command frames ------------------------------------------------
+  # 19 bytes: AA B4 h1 h2 h3 00*10 FF FF <checksum> AB, checksum = h1+h2+h3-2.
+  # Byte-for-byte what SDS_rawcmd() in the original firmware sends.
+  - id: sds_start                     # 06 01 01 — wake (fan on)
+    then:
+      - uart.write:
+          id: sds_uart
+          data: [0xAA, 0xB4, 0x06, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+                 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x06, 0xAB]
+  - id: sds_stop                      # 06 01 00 — sleep (fan off)
+    then:
+      - uart.write:
+          id: sds_uart
+          data: [0xAA, 0xB4, 0x06, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x05, 0xAB]
+  - id: sds_set_continuous            # 08 01 00 — working period 0 = continuous
+    then:
+      - uart.write:
+          id: sds_uart
+          data: [0xAA, 0xB4, 0x08, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x07, 0xAB]
+  - id: sds_set_report_active         # 02 01 00 — reporting mode = active
+    then:
+      - uart.write:
+          id: sds_uart
+          data: [0xAA, 0xB4, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x01, 0xAB]
+
+  # --- the measurement cycle (docs §4) --------------------------------------
+  - id: measure_cycle
+    mode: single
+    then:
+      - lambda: |-
+          id(pm25_samples).clear();
+          id(pm10_samples).clear();
+          id(collecting) = false;
+      - script.execute: sds_start
+      # Warm-up: frames arrive but are deliberately ignored.
+      - delay: ${warmup_time_s}s
+      - lambda: 'id(collecting) = true;'
+      # Reading window: frames are accumulated.
+      - delay: ${reading_time_s}s
+      - lambda: 'id(collecting) = false;'
+      - script.execute: sds_stop
+      - lambda: |-
+          // Trimmed mean: with more than two samples, discard one lowest and
+          // one highest before averaging (airrohr-firmware.ino:3527-3536).
+          auto trimmed = [](std::vector<float> &v) -> float {
+            if (v.empty())
+              return NAN;
+            float sum = 0.0f, mn = v[0], mx = v[0];
+            for (float f : v) {
+              sum += f;
+              if (f < mn) mn = f;
+              if (f > mx) mx = f;
+            }
+            size_t n = v.size();
+            if (n > 2) {
+              sum -= mn;
+              sum -= mx;
+              n -= 2;
+            }
+            return sum / (float) n;
+          };
+
+          const float p1 = trimmed(id(pm10_samples));
+          const float p2 = trimmed(id(pm25_samples));
+          id(last_sample_count) = (int) id(pm10_samples).size();
+          ESP_LOGI("airrohr", "cycle: %d SDS samples, PM10=%.2f PM2.5=%.2f",
+                   id(last_sample_count), p1, p2);
+          if (id(last_sample_count) < 3)
+            ESP_LOGW("airrohr", "fewer than 3 SDS samples this cycle");
+
+          // No samples means no value at all, as in the original — the keys are
+          // simply absent from the payload.
+          if (!std::isnan(p1)) id(sds_p1).publish_state(p1);
+          if (!std::isnan(p2)) id(sds_p2).publish_state(p2);
+
+          // --- build the three payloads (docs §5) ---
+          // Every value is a JSON *string* with two decimals; NaN is skipped
+          // rather than serialised.
+          auto val = [](const char *key, float v) -> std::string {
+            if (std::isnan(v))
+              return std::string();
+            return std::string("{\"value_type\":\"") + key + "\",\"value\":\"" +
+                   esphome::str_sprintf("%.2f", v) + "\"},";
+          };
+          auto ival = [](const char *key, int v) -> std::string {
+            return std::string("{\"value_type\":\"") + key + "\",\"value\":\"" +
+                   esphome::str_sprintf("%d", v) + "\"},";
+          };
+          // Returns an empty string when there is nothing to report, so the
+          // request is skipped rather than sent with an empty array — the
+          // original checks data.length() before posting.
+          auto wrap = [](std::string items) -> std::string {
+            if (items.empty())
+              return std::string();
+            items.erase(items.size() - 1);  // trailing comma
+            return std::string("{\"software_version\": \"${software_version}\", "
+                               "\"sensordatavalues\":[") + items + "]}";
+          };
+
+          const float t = id(bme_temperature).state;
+          const float h = id(bme_humidity).state;
+          // ESPHome reports hPa; airRohr sends Pa.
+          const float pa = std::isnan(id(bme_pressure).state)
+                               ? NAN
+                               : id(bme_pressure).state * 100.0f;
+
+          // sensor.community: one request per sensor, prefixes stripped.
+          id(payload_sc_pm) = wrap(val("P1", p1) + val("P2", p2));
+          id(payload_sc_bme) = wrap(val("temperature", t) + val("humidity", h) +
+                                    val("pressure", pa));
+
+          // madavi: everything in one request, prefixes kept.
+          std::string all;
+          all += val("SDS_P1", p1);
+          all += val("SDS_P2", p2);
+          all += val("BME280_temperature", t);
+          all += val("BME280_humidity", h);
+          all += val("BME280_pressure", pa);
+          all += ival("samples", id(last_sample_count));
+          all += ival("interval", ${sending_interval_s} * 1000);
+          const float rssi = id(wifi_rssi).state;
+          all += ival("signal", std::isnan(rssi) ? 0 : (int) rssi);
+          id(payload_combined) = wrap(all);
+      - script.execute: upload_all
+
+  # --- uploads (docs §5) ----------------------------------------------------
+  # One place where the sensor.community request shape is defined.
+  - id: post_sensor_community
+    mode: queued
+    max_runs: 4
+    parameters:
+      pin: string
+      payload: string
+    then:
+      - http_request.post:
+          url: ${sc_url}
+          request_headers:
+            Content-Type: application/json
+            X-Sensor: !lambda 'return esphome::str_sprintf("esp8266-%u", ESP.getChipId());'
+            X-MAC-ID: !lambda 'return "esp8266-" + esphome::get_mac_address();'
+            X-PIN: !lambda 'return pin;'
+          body: !lambda 'return payload;'
+          on_response:
+            then:
+              # NB: script parameters are not in scope inside a trigger's
+              # lambda, so the pin is not logged here.
+              - lambda: |-
+                  ESP_LOGI("airrohr", "sensor.community -> HTTP %d", response->status_code);
+
+  - id: upload_all
+    mode: single
+    then:
+      - if:
+          condition:
+            switch.is_on: publish_sensor_community
+          then:
+            # X-PIN 1 = PM sensor, X-PIN 11 = BME280. A sensor that produced no
+            # reading this cycle is skipped entirely, not sent empty.
+            - if:
+                condition:
+                  lambda: 'return !id(payload_sc_pm).empty();'
+                then:
+                  - script.execute:
+                      id: post_sensor_community
+                      pin: "1"
+                      payload: !lambda 'return id(payload_sc_pm);'
+            - if:
+                condition:
+                  lambda: 'return !id(payload_sc_bme).empty();'
+                then:
+                  - script.execute:
+                      id: post_sensor_community
+                      pin: "11"
+                      payload: !lambda 'return id(payload_sc_bme);'
+            - wait_until:
+                condition:
+                  not:
+                    script.is_running: post_sensor_community
+      - if:
+          condition:
+            switch.is_on: publish_madavi
+          then:
+            - http_request.post:
+                url: ${madavi_url}
+                request_headers:
+                  Content-Type: application/json
+                  X-Sensor: !lambda 'return esphome::str_sprintf("esp8266-%u", ESP.getChipId());'
+                  X-MAC-ID: !lambda 'return "esp8266-" + esphome::get_mac_address();'
+                body: !lambda 'return id(payload_combined);'
+                on_response:
+                  then:
+                    - lambda: |-
+                        ESP_LOGI("airrohr", "madavi -> HTTP %d", response->status_code);
