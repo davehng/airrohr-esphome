@@ -1,12 +1,12 @@
 # Plan: ESPHome port of airrohr-firmware → `src-esphome/airrohr.yaml`
 
-> **Status: implemented and compiling.** The port is in
+> **Status: complete and live.** The port is in
 > [../src-esphome/airrohr.yaml](../src-esphome/airrohr.yaml), with
-> [../src-esphome/secrets.yaml.example](../src-esphome/secrets.yaml.example) alongside it.
-> **Status: complete and live.** Every step of [Verification](#verification) passes. The port runs on
-> hardware and publishes to the real sensor.community and madavi endpoints, which accept the data
-> (HTTP 201 and 200 respectively). See [Implementation notes](#implementation-notes) for what changed
-> along the way and what is worth watching in the long run.
+> [../src-esphome/secrets.yaml.example](../src-esphome/secrets.yaml.example) alongside it. Every step
+> of [Verification](#verification) passes: it runs on hardware and publishes to the real
+> sensor.community and madavi endpoints, which accept the data (HTTP 201 and 200 respectively). See
+> [Implementation notes](#implementation-notes) for what changed along the way and what is worth
+> watching in the long run.
 
 ## Context
 
@@ -62,8 +62,8 @@ template.
 ### Structure
 
 **`substitutions`** — everything a user would have edited on airRohr's `/config` page: device name,
-`temp_offset`, `height_above_sealevel`, `sending_interval_s` (145), `warmup_time_s` (15),
-`reading_time_s` (5), endpoint URLs, `software_version`.
+`temp_offset`, `height_above_sealevel`, `bme280_address`, `sending_interval_s` (145),
+`warmup_time_s` (15), `reading_time_s` (5), endpoint URLs, `software_version`.
 
 **Core blocks** — `esp8266` (board `nodemcuv2`), `wifi` (with `ap:` fallback, replacing airRohr's
 captive portal), `captive_portal`, `logger`, `api`, `ota`, `web_server`, `http_request`
@@ -83,12 +83,16 @@ captive portal), `captive_portal`, `logger`, `api`, `ota`, `web_server`, `http_r
     `k3=243.12` ([:1346-1355](../src-original/airrohr-firmware/airrohr-firmware.ino#L1346-L1355))
   - pressure at sea level — `p_hPa * pow((T+273.15)/(T+273.15+0.0065*h), -5.255)`
     ([:1360-1367](../src-original/airrohr-firmware/airrohr-firmware.ino#L1360-L1367))
-- Diagnostics standing in for `/status`: `wifi_signal`, `uptime`, and a `version` text sensor.
+- Diagnostics standing in for `/status`: `wifi_signal`, `uptime`, a `version` text sensor, and a
+  template text sensor reporting the sensor.community id. The first three are
+  `disabled_by_default: true` — they still run (the payload's `signal` field reads `wifi_signal`),
+  but Home Assistant does not record them unless enabled.
 
 **Switches** — `publish_sensor_community` and `publish_madavi`, template switches with
 `restore_mode: RESTORE_DEFAULT_ON`, optimistic. Each upload script checks its own switch.
 
-**Globals** — `std::vector<float>` for PM2.5 and PM10 samples, a `bool collecting` gate.
+**Globals** — `std::vector<float>` for PM2.5 and PM10 samples, a `bool collecting` gate, an
+`int last_sample_count`, and three `std::string` payloads staged by the cycle for `upload_all`.
 
 ### The measurement cycle
 
@@ -188,16 +192,17 @@ Deviations from the plan as written, decided while building:
 
 Observed on hardware, not defects:
 
-- **`measure_cycle took a long time for an operation (134 ms), max is 50 ms`** is logged every cycle.
-  `http_request` is synchronous, so the three POSTs block ESPHome's main loop. Measured at 134 ms
-  against a LAN listener and **2447 ms against the live endpoints** — three sequential internet round
-  trips. Worst case is the 10 s timeout per request, so roughly 30 s if all three hang. This is the same blocking behaviour the original firmware has, and it happens after the
-  fan is already off, so nothing time-critical is affected — but the warning is permanent.
+- **`measure_cycle took a long time for an operation`** is logged every cycle. `http_request` is
+  synchronous, so the three POSTs block ESPHome's main loop: measured at **134 ms** against a LAN
+  listener and **2447 ms against the live endpoints** — three sequential internet round trips. Worst
+  case is the 10 s timeout per request, so roughly 30 s if all three hang. The original firmware
+  blocks the same way, and it happens after the fan is already off, so nothing time-critical is
+  affected — but the warning is permanent.
 - **ESPHome fires the first `interval:` within 5 s of boot, not after a full interval.**
   `Scheduler::set_interval` offsets the first execution by `min(interval/2, 5s)` chosen at random, to
   avoid a thundering herd. So the first measurement cycle begins almost immediately after power-on —
   exactly when the SDS011 is coldest — rather than 145 s in. This is why cold starts reliably produce
-  empty cycles, and why the skip-on-no-samples behaviour below is structural rather than cosmetic.
+  empty cycles, rather than it being a one-off.
 - **The first cycles after a cold start reported `samples: 0`**, then self-corrected. The SDS011 needs
   several minutes of running before it returns usable readings, which no per-cycle warm-up of a
   sensible length can cover. Rather than lengthen the warm-up, sensors are kept **independent**: a
@@ -230,7 +235,9 @@ Three further defects were found and fixed during a read-back of the generated f
 
 ## Verification
 
-Steps 1 and 2 **pass**. Steps 3 onward are outstanding — nothing has run on hardware yet.
+**All six steps pass.** The port compiles, runs on hardware, and publishes accepted data to the live
+endpoints. Each step below records the evidence rather than just the outcome. The weakest link is
+sea-level pressure, which has only been exercised at 0.1 m — see step 5.
 
 1. ~~`esphome config src-esphome/airrohr.yaml`~~ — done, schema and substitutions resolve.
 2. ~~`esphome compile src-esphome/airrohr.yaml`~~ — done, builds clean at 50.7% flash / 45.6% RAM.
@@ -252,11 +259,12 @@ Steps 1 and 2 **pass**. Steps 3 onward are outstanding — nothing has run on ha
    (1.07 trimmed vs 1.08 plain). Every cycle observed collected exactly 5 samples, as predicted from
    ~1 frame/s across the 5 s window.
 5. ~~Derived values.~~ Dew point verified: 24.07 °C / 50.66 %RH produced **13.2 °C**, matching the
-   original's formula computed independently. Sea-level pressure **cannot be verified** while
-   `height_above_sealevel` is `0.0` — the formula reduces to the identity and returns the measured
-   pressure unchanged (observed: 1018.72 hPa against a measured 1018.7). Set a real height to
-   exercise it; at 100 m that reading becomes 1030.52 hPa, about +11.8 hPa, matching the usual rule
-   of thumb.
+   original's formula computed independently. Sea-level pressure was exercised at
+   `height_above_sealevel: 0.1`, where the device reported **1018.71 hPa** against an independently
+   computed 1018.712 — an exact match, but only a **weak** test: 0.1 m moves the result by 0.012 hPa,
+   so an error in the exponent would be invisible at that scale. Note the deployment site is
+   genuinely at sea level, so in normal operation this value is the identity; a convincing test needs
+   a temporary height (at 100 m the same reading becomes 1030.46 hPa, about +11.8 hPa).
 6. ~~Live publishing.~~ Done. With `sc_url`/`madavi_url` pointed at the real endpoints and both
    switches on, a cycle produced `sensor.community -> HTTP 201` for both the `X-PIN: 1` and
    `X-PIN: 11` requests — 201 Created is the API accepting the reading — and `madavi -> HTTP 200`.
