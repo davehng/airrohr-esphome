@@ -1,0 +1,91 @@
+# airrohr-esphome
+
+An [ESPHome](https://esphome.io) port of the
+[airRohr firmware](https://github.com/opendata-stuttgart/sensors-software) — the Arduino firmware
+behind the [Sensor.Community](https://sensor.community) citizen air-quality network.
+
+The goal is that **the network cannot tell the difference**. The device reports the same values, in
+the same payload format, under the same sensor identity as the original firmware — while WiFi
+provisioning, OTA updates, logging, configuration and the local UI are handed to ESPHome instead of
+being reimplemented.
+
+## Target hardware
+
+| | |
+| --- | --- |
+| Board | NodeMCU v2/v3 (ESP8266) |
+| Particulate matter | Nova Fitness SDS011 (serial, D1/D2) |
+| Temperature, humidity, pressure | Bosch BME280 (I²C, D3/D4) |
+| Display | none |
+
+This is the common Sensor.Community build. The original firmware supports sixteen sensors and seven
+upload targets; this port deliberately covers one configuration well rather than all of them.
+
+## What is preserved from the original
+
+- **Sensor identity.** `X-Sensor: esp8266-<chipid>` is derived from the MAC exactly as the original
+  computes it, so a sensor already registered with Sensor.Community keeps its registration after
+  reflashing.
+- **The request shape.** One POST per sensor with the sensor prefix stripped and an `X-PIN` header
+  (1 for the SDS011, 11 for the BME280), values as JSON strings with two decimals.
+- **SDS011 duty cycling.** The fan is stopped between cycles and started 20 s before each send —
+  15 s warm-up, then a 5 s collection window — using the original's own command frames. This is what
+  keeps the laser's service life, and it is what the network's data expects.
+- **Trimmed averaging.** The lowest and highest sample of each cycle are discarded before averaging.
+- **Temperature correction** as a configurable offset, applied to temperature only.
+
+## What is different
+
+- Updates go through ESPHome's OTA rather than the original's daily self-update and two-stage loader.
+- Configuration lives in YAML rather than a web form backed by a JSON file in flash.
+- Publishing to Sensor.Community and to madavi.de are **independent runtime switches**, so the device
+  can run without publishing anywhere.
+- The temperature correction is applied to every temperature sensor; the original applies it to only
+  three of its seven.
+- Dew point and sea-level pressure are exposed locally (Home Assistant / web server) and, as in the
+  original, are never uploaded.
+
+## Layout
+
+| Path | Contents |
+| --- | --- |
+| [`src-esphome/`](src-esphome/) | The port: `airrohr.yaml` and a `secrets.yaml.example` template |
+| [`src-original/`](src-original/) | Unmodified checkout of the upstream `sensors-software` repository, for reference |
+| [`docs/airrohr.md`](docs/airrohr.md) | What the original firmware does — measurement cycle, payload formats, configuration, OTA |
+| [`docs/portingplan.md`](docs/portingplan.md) | How the port was designed, what changed during implementation, and how to verify it |
+
+## Getting started
+
+```sh
+cd src-esphome
+cp secrets.yaml.example secrets.yaml   # then fill in your WiFi and keys
+esphome run airrohr.yaml
+```
+
+Requires ESPHome 2024.8 or newer.
+
+**Before publishing to the live API**, leave both `Publish to …` switches off and check the logs for
+a few cycles: each should report roughly five SDS011 samples. `docs/portingplan.md` describes a dry
+run against a local HTTP listener to inspect the exact payload first.
+
+## Status
+
+Compiles clean (50.7% flash, 45.6% RAM on a NodeMCU v2). **Not yet verified on hardware** — the
+measurement cycle, the software UART link to the SDS011 and the upload payloads have not been
+exercised on a real device. Treat it as ready to test, not ready to deploy.
+
+## License
+
+**GPL-3.0**, the same licence as the firmware it is derived from — see [LICENSE](LICENSE).
+
+The port reproduces protocol details, command frames and algorithms read directly from the original
+GPL-3.0 sources, so it is a derivative work and carries the same terms.
+
+## Attribution
+
+The original airRohr firmware is the work of Code for Stuttgart, Sensor.Community contributors and
+Dirk Mueller; the copy in [`src-original/`](src-original/) is theirs, unmodified.
+
+The ESPHome port and the documentation in this repository were written by
+**[Claude](https://claude.com/claude-code)** (Anthropic), working from the original firmware sources
+under the direction of the repository owner.

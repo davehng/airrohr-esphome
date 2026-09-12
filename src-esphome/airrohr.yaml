@@ -1,5 +1,16 @@
 # airRohr — ESPHome port
 #
+# Copyright (C) 2026 Dave Hng
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version. It is distributed WITHOUT ANY WARRANTY; see the GNU General Public
+# License for more details: <http://www.gnu.org/licenses/>.
+#
+# Derived from the airRohr firmware (Code for Stuttgart, Sensor.Community
+# contributors, Dirk Mueller), also GPL-3.0. See ../LICENSE.
+#
 # Target hardware: NodeMCU v2/v3 (ESP8266) + Nova SDS011 + Bosch BME280, no display.
 # Behaviour is documented in ../docs/airrohr.md; section references below point there.
 #
