@@ -7,7 +7,9 @@ behind the [Sensor.Community](https://sensor.community) citizen air-quality netw
 My motivation for doing the port was wanting an easier way to update the firmware (ESPHome is great
 for this) and I was having problems with the AirRohr sensor not playing nicely with the 802.11kv
 features on my home wifi network. Claude is also really good at rewriting and porting code, so
-Claude Code greatly reduced the friction of getting this work done.
+Claude Code greatly reduced the friction of getting this work done. I also didn't want to rebuild
+the hardware (yet) to use a newer device (e.g. ESP32 family), so this work was done as an
+in-situ firmware replacement for my AirRohr.
 
 The goal for the port is that **the sensor data logger APIs cannot tell the difference**.
 The device reports the same values, in the same payload format, under the same sensor identity
