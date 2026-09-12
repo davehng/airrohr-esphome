@@ -30,7 +30,8 @@ upload targets; this port deliberately covers one configuration well rather than
   (1 for the SDS011, 11 for the BME280), values as JSON strings with two decimals.
 - **SDS011 duty cycling.** The fan is stopped between cycles and started 20 s before each send —
   15 s warm-up, then a 5 s collection window — using the original's own command frames. This is what
-  keeps the laser's service life, and it is what the network's data expects.
+  keeps the laser's service life, and it is what the network's data expects. The first cycle after a
+  boot warms up for 5 minutes instead, since the sensor returns nothing usable from cold.
 - **Trimmed averaging.** The lowest and highest sample of each cycle are discarded before averaging.
 - **Temperature correction** as a configurable offset, applied to temperature only.
 
@@ -80,9 +81,13 @@ run against a local HTTP listener to inspect the exact payload first.
 
 ## Status
 
-Compiles clean (50.7% flash, 45.6% RAM on a NodeMCU v2). **Not yet verified on hardware** — the
-measurement cycle, the software UART link to the SDS011 and the upload payloads have not been
-exercised on a real device. Treat it as ready to test, not ready to deploy.
+Working. Runs on a NodeMCU v2 (50.7% flash, 45.6% RAM) and publishes to the live Sensor.Community
+and madavi endpoints, which accept the data. The duty cycle, trimmed averaging, unit conversions,
+payload shapes and device identity have all been verified against real readings — see
+[docs/portingplan.md](docs/portingplan.md) for the evidence.
+
+Long-run behaviour is still unproven: it has not yet been left running for days, so heap
+fragmentation and reliability across reboots are unmeasured.
 
 ## License
 

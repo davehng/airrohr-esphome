@@ -3,11 +3,10 @@
 > **Status: implemented and compiling.** The port is in
 > [../src-esphome/airrohr.yaml](../src-esphome/airrohr.yaml), with
 > [../src-esphome/secrets.yaml.example](../src-esphome/secrets.yaml.example) alongside it.
-> `esphome compile` succeeds, it runs on hardware, and the full upload chain has been verified
-> against a local HTTP listener — request shapes, device identity, unit conversions and the trimmed
-> average all check out. What remains is pointing it at the live endpoints. See
-> [Verification](#verification) for the evidence and
-> [Implementation notes](#implementation-notes) for what changed along the way.
+> **Status: complete and live.** Every step of [Verification](#verification) passes. The port runs on
+> hardware and publishes to the real sensor.community and madavi endpoints, which accept the data
+> (HTTP 201 and 200 respectively). See [Implementation notes](#implementation-notes) for what changed
+> along the way and what is worth watching in the long run.
 
 ## Context
 
@@ -99,7 +98,9 @@ An `interval: ${sending_interval_s}s` runs one `script` (`mode: single`), which 
 ```text
 clear sample vectors, collecting = false
 uart.write  Start frame                 → fan on
-delay ${warmup_time_s}s                 → frames arrive and are ignored
+delay warm-up                           → frames arrive and are ignored
+          (${first_warmup_time_s}s on the first cycle after a boot,
+           ${warmup_time_s}s thereafter)
 collecting = true
 delay ${reading_time_s}s                → frames accumulate
 collecting = false
@@ -190,13 +191,16 @@ Deviations from the plan as written, decided while building:
 Observed on hardware, not defects:
 
 - **`measure_cycle took a long time for an operation (134 ms), max is 50 ms`** is logged every cycle.
-  `http_request` is synchronous, so the three POSTs block ESPHome's main loop. 134 ms against a LAN
-  listener; against real internet endpoints it will be longer, up to the 10 s timeout per request if
-  one hangs. This is the same blocking behaviour the original firmware has, and it happens after the
+  `http_request` is synchronous, so the three POSTs block ESPHome's main loop. Measured at 134 ms
+  against a LAN listener and **2447 ms against the live endpoints** — three sequential internet round
+  trips. Worst case is the 10 s timeout per request, so roughly 30 s if all three hang. This is the same blocking behaviour the original firmware has, and it happens after the
   fan is already off, so nothing time-critical is affected — but the warning is permanent.
-- **The first cycles after a cold start can report `samples: 0`.** Seen once, then self-corrected.
-  Worth watching across a power cycle: if it is reliably the first cycle, the fix is a longer warm-up
-  on that cycle only.
+- **The first cycles after a cold start reported `samples: 0`**, then self-corrected. The SDS011 does
+  not produce usable readings until it has run for a while from cold, and the normal 15 s warm-up is
+  not enough for that. Addressed with a `first_warmup_time_s` substitution (default 300 s) applied to
+  the first cycle after each boot only, gated by a non-restored `first_cycle` global. Note that this
+  cycle overruns the 145 s send interval, so the intervening `interval:` firings are dropped by
+  `mode: single` and the first two or three sends after a reboot are skipped.
 
 Found on first contact with hardware and fixed:
 
@@ -249,6 +253,8 @@ Steps 1 and 2 **pass**. Steps 3 onward are outstanding — nothing has run on ha
    pressure unchanged (observed: 1018.72 hPa against a measured 1018.7). Set a real height to
    exercise it; at 100 m that reading becomes 1030.52 hPa, about +11.8 hPa, matching the usual rule
    of thumb.
-6. **Remaining:** point `sc_url`/`madavi_url` back at the live endpoints, enable
-   `publish_sensor_community`, and confirm the device appears with fresh data at
-   `devices.sensor.community` under its existing ID.
+6. ~~Live publishing.~~ Done. With `sc_url`/`madavi_url` pointed at the real endpoints and both
+   switches on, a cycle produced `sensor.community -> HTTP 201` for both the `X-PIN: 1` and
+   `X-PIN: 11` requests — 201 Created is the API accepting the reading — and `madavi -> HTTP 200`.
+   The trimmed average was confirmed once more on live data: frames `3.6, 4.1, 4.2, 4.0, 4.5`
+   reported **4.10**, against a plain mean of 4.08.

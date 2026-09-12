@@ -45,6 +45,11 @@ substitutions:
   warmup_time_s: "15"
   reading_time_s: "5"
 
+  # The SDS011 needs longer to stabilise from cold than the normal 15 s warm-up
+  # allows, and the first cycles after a reboot were observed returning no
+  # samples at all. The first cycle after each boot uses this warm-up instead.
+  first_warmup_time_s: "300"
+
   # Added to the BME280 temperature only, exactly as airRohr's temp_correction.
   temp_offset: "0.0"
   # Metres above sea level, for the local-only barometric reduction.
@@ -149,6 +154,12 @@ globals:
     type: int
     restore_value: false
     initial_value: "0"
+  # True until the first measurement cycle after a boot has warmed up. Not
+  # restored, so every reboot gets the long warm-up again.
+  - id: first_cycle
+    type: bool
+    restore_value: false
+    initial_value: "true"
   # Payloads staged by the cycle script and posted by upload_all.
   - id: payload_sc_pm
     type: std::string
@@ -359,9 +370,18 @@ script:
           id(pm10_samples).clear();
           id(collecting) = false;
       - script.execute: sds_start
-      # Warm-up: frames arrive but are deliberately ignored.
-      - delay: ${warmup_time_s}s
-      - lambda: 'id(collecting) = true;'
+      # Warm-up: frames arrive but are deliberately ignored. The first cycle
+      # after a boot warms up for much longer, because the SDS011 does not
+      # produce usable readings until it has run for a while from cold.
+      - delay: !lambda |-
+          return (id(first_cycle) ? ${first_warmup_time_s} : ${warmup_time_s}) * 1000;
+      - lambda: |-
+          if (id(first_cycle)) {
+            ESP_LOGI("airrohr", "first cycle since boot: used the %d s warm-up",
+                     ${first_warmup_time_s});
+            id(first_cycle) = false;
+          }
+          id(collecting) = true;
       # Reading window: frames are accumulated.
       - delay: ${reading_time_s}s
       - lambda: 'id(collecting) = false;'
