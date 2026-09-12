@@ -50,6 +50,12 @@ substitutions:
   # Metres above sea level, for the local-only barometric reduction.
   height_above_sealevel: "0.0"
 
+  # BME280 I2C address. Breakout boards are strapped to one of two addresses;
+  # 0x76 is the common one, 0x77 the Bosch default. The original firmware probes
+  # 0x77 then falls back to 0x76 — here it is pinned, so set it to whatever the
+  # `Found device at address 0x..` line in the boot log reports.
+  bme280_address: "0x76"
+
   # Free-form string sent in every payload as "software_version".
   software_version: "airrohr-esphome-0.1"
 
@@ -200,7 +206,7 @@ sensor:
   # 1x oversampling and no IIR filter match airRohr's setSampling().
   - platform: bme280_i2c
     i2c_id: bus_i2c
-    address: 0x77
+    address: ${bme280_address}
     update_interval: 60s
     iir_filter: "OFF"
     temperature:
@@ -260,14 +266,23 @@ sensor:
     name: "WiFi signal"
     update_interval: 60s
     entity_category: diagnostic
+    # Hidden from Home Assistant unless enabled there. The component still runs,
+    # so the payload's "signal" field keeps working.
+    disabled_by_default: true
   - platform: uptime
     name: "Uptime"
     entity_category: diagnostic
+    # Publishes every 60 s and would otherwise fill the recorder; enable it in
+    # Home Assistant if you want it.
+    disabled_by_default: true
 
 text_sensor:
   - platform: version
     name: "ESPHome version"
     entity_category: diagnostic
+    # Created but not added to Home Assistant unless the user enables it, so it
+    # does not sit in the recorder logging a value that never changes.
+    disabled_by_default: true
   # Device identity: ESP.getChipId() is the low 24 bits of the MAC, which is
   # exactly what the original firmware puts in X-Sensor.
   - platform: template

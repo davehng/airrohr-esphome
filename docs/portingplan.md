@@ -3,9 +3,11 @@
 > **Status: implemented and compiling.** The port is in
 > [../src-esphome/airrohr.yaml](../src-esphome/airrohr.yaml), with
 > [../src-esphome/secrets.yaml.example](../src-esphome/secrets.yaml.example) alongside it.
-> `esphome compile` succeeds. It has **not yet been run on hardware** — see
-> [Verification](#verification) for what remains, and
-> [Implementation notes](#implementation-notes) for what changed during the build.
+> `esphome compile` succeeds, it runs on hardware, and the full upload chain has been verified
+> against a local HTTP listener — request shapes, device identity, unit conversions and the trimmed
+> average all check out. What remains is pointing it at the live endpoints. See
+> [Verification](#verification) for the evidence and
+> [Implementation notes](#implementation-notes) for what changed along the way.
 
 ## Context
 
@@ -73,7 +75,7 @@ captive portal), `captive_portal`, `logger`, `api`, `ota`, `web_server`, `http_r
 
 - `sds011` with `id`, both PM sensors `internal: true` — they are taps, not published entities. Each
   has `on_value` that appends to a global vector **only while the collection window is open**.
-- `bme280_i2c`, `update_interval: 60s`, `address: 0x77`, temperature carrying
+- `bme280_i2c`, `update_interval: 60s`, `address: ${bme280_address}`, temperature carrying
   `filters: [offset: ${temp_offset}]`.
 - Two `template` sensors `SDS_P1` / `SDS_P2`, `update_interval: never`, published by the cycle script.
 - Two `template` sensors for the local-only derived values, both reading the **published**
@@ -185,6 +187,25 @@ Deviations from the plan as written, decided while building:
 - **User-Agent differs.** airRohr sends `version/chipid/macid`; the port sends just the version
   string. Identification is via `X-Sensor`, which matches exactly.
 
+Observed on hardware, not defects:
+
+- **`measure_cycle took a long time for an operation (134 ms), max is 50 ms`** is logged every cycle.
+  `http_request` is synchronous, so the three POSTs block ESPHome's main loop. 134 ms against a LAN
+  listener; against real internet endpoints it will be longer, up to the 10 s timeout per request if
+  one hangs. This is the same blocking behaviour the original firmware has, and it happens after the
+  fan is already off, so nothing time-critical is affected — but the warning is permanent.
+- **The first cycles after a cold start can report `samples: 0`.** Seen once, then self-corrected.
+  Worth watching across a power cycle: if it is reliably the first cycle, the fix is a longer warm-up
+  on that cycle only.
+
+Found on first contact with hardware and fixed:
+
+- **The BME280 I2C address was pinned to `0x77`; the actual device is at `0x76`**, so the component
+  logged `Communication failed` and was marked FAILED, making every read NaN. The original firmware
+  probes `0x77` then falls back to `0x76`; the port cannot probe, so the address is now a
+  `bme280_address` substitution, defaulting to the commoner `0x76`. The `i2c: scan: true` output in
+  the boot log reports the right value for a given board.
+
 Found on the first `esphome compile` and fixed:
 
 - **`request_headers` lambdas must return `const char *`**, not `std::string` — five lambdas failed
@@ -206,13 +227,28 @@ Steps 1 and 2 **pass**. Steps 3 onward are outstanding — nothing has run on ha
 1. ~~`esphome config src-esphome/airrohr.yaml`~~ — done, schema and substitutions resolve.
 2. ~~`esphome compile src-esphome/airrohr.yaml`~~ — done, builds clean at 50.7% flash / 45.6% RAM.
    See Risks above.
-3. **Dry run before touching the live API.** Point the `sc_url`/`madavi_url` substitutions at a
-   local listener (`python -m http.server` or `nc -l`) and confirm on the wire: two separate POSTs
-   with the right `X-PIN`, stripped keys, two-decimal string values, `X-Sensor` matching the chip ID
-   the original firmware reports.
-4. Flash with both switches **off**; confirm the cycle runs, sample counts are ~5, and the trimmed
-   mean matches a hand calculation from the logged raw samples.
-5. Check the derived values against the original: dew point and sea-level pressure for the same
-   temperature/pressure inputs should agree to the displayed precision.
-6. Only then enable `publish_sensor_community` and confirm the device appears with fresh data at
+3. ~~**Dry run before touching the live API.**~~ Done, against a local Python HTTP listener. Three
+   requests per cycle, exactly as designed:
+   - `X-PIN: 1` → `{"P1":"4.10"},{"P2":"0.80"}` — prefixes stripped, two-decimal strings
+   - `X-PIN: 11` → `temperature`, `humidity`, `pressure` — the last as **101875.55 Pa**, i.e. the
+     hPa→Pa conversion is correct
+   - madavi → the combined payload with prefixes intact, plus `samples`/`interval`/`signal`
+   - `X-Sensor` was `esp8266-<n>`, where `<n>` is the decimal value of the low 24 bits of the
+     device's own MAC — verified against the test device. (Worked example: a device with MAC
+     `aa:bb:cc:dd:ee:ff` reports `esp8266-14544639`, since `0xDDEEFF` = 14544639.) This is what
+     the original firmware sends, so an existing registration is preserved
+   - each returned HTTP 200 and was logged as such
+4. ~~Confirm sample counts and the trimmed mean.~~ Done, and the outlier rejection is confirmed to
+   be doing real work. A cycle with frames PM10 `4.8, 4.6, 4.8, 4.9, 6.7` dropped the 4.6 and the
+   6.7 spike and reported **4.83** — the plain mean would have been 5.16. PM2.5 agreed as well
+   (1.07 trimmed vs 1.08 plain). Every cycle observed collected exactly 5 samples, as predicted from
+   ~1 frame/s across the 5 s window.
+5. ~~Derived values.~~ Dew point verified: 24.07 °C / 50.66 %RH produced **13.2 °C**, matching the
+   original's formula computed independently. Sea-level pressure **cannot be verified** while
+   `height_above_sealevel` is `0.0` — the formula reduces to the identity and returns the measured
+   pressure unchanged (observed: 1018.72 hPa against a measured 1018.7). Set a real height to
+   exercise it; at 100 m that reading becomes 1030.52 hPa, about +11.8 hPa, matching the usual rule
+   of thumb.
+6. **Remaining:** point `sc_url`/`madavi_url` back at the live endpoints, enable
+   `publish_sensor_community`, and confirm the device appears with fresh data at
    `devices.sensor.community` under its existing ID.
