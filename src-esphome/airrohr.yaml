@@ -56,6 +56,16 @@ substitutions:
   # `Found device at address 0x..` line in the boot log reports.
   bme280_address: "0x76"
 
+  # Home Assistant entity that activity-log entries are filed against. Home
+  # Assistant has no entity for a device, and logbook.log takes only entity_id
+  # or domain, so this must name one of this device's own entities — that is
+  # what associates an entry with the device and puts it on the device page.
+  # The "Sensor ID" text sensor is used because it stands for the device rather
+  # than any one measurement. Without an entity_id entries land under the
+  # generic "logbook" domain and appear only in the global Activity panel.
+  # Confirm the real id in Developer Tools -> States after the first flash.
+  logbook_entity_id: "sensor.airrohr_esphome_sensor_id"
+
   # Free-form string sent in every payload as "software_version".
   software_version: "airrohr-esphome-0.1"
 
@@ -378,6 +388,7 @@ script:
                 action: logbook.log
                 data:
                   name: ${friendly_name}
+                  entity_id: ${logbook_entity_id}
                   message: "Measurement cycle started"
       - script.execute: sds_start
       # Warm-up: frames arrive but are deliberately ignored.
@@ -544,6 +555,7 @@ script:
                       action: logbook.log
                       data:
                         name: ${friendly_name}
+                        entity_id: ${logbook_entity_id}
                         message: "Published to sensor.community"
       - if:
           condition:
@@ -568,4 +580,5 @@ script:
                       action: logbook.log
                       data:
                         name: ${friendly_name}
+                        entity_id: ${logbook_entity_id}
                         message: "Published to madavi.de"

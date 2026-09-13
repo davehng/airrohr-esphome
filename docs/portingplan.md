@@ -5,8 +5,8 @@
 > [../src-esphome/secrets.yaml.example](../src-esphome/secrets.yaml.example) alongside it. Every step
 > of [Verification](#verification) passes for the port itself: it runs on hardware and publishes to
 > the real sensor.community and madavi endpoints, which accept the data (HTTP 201 and 200
-> respectively). The later Home Assistant activity-logging addition compiles but is not yet confirmed
-> at runtime — step 7. See
+> respectively). The optional Home Assistant activity logging added afterwards works too — step 7.
+> See
 > [Implementation notes](#implementation-notes) for what changed along the way and what is worth
 > watching in the long run.
 
@@ -245,7 +245,7 @@ Three further defects were found and fixed during a read-back of the generated f
 **Steps 1-6 pass.** The port compiles, runs on hardware, and publishes accepted data to the live
 endpoints. Each step below records the evidence rather than just the outcome. The weakest link is
 sea-level pressure, which has only been exercised at 0.1 m — see step 5. Step 7 covers the optional
-Home Assistant activity logging added afterwards; it compiles but has not been confirmed at runtime.
+Home Assistant activity logging added afterwards, which now works; two sub-items remain open there.
 
 1. ~~`esphome config src-esphome/airrohr.yaml`~~ — done, schema and substitutions resolve.
 2. ~~`esphome compile src-esphome/airrohr.yaml`~~ — done, builds clean at 50.7% flash / 45.6% RAM.
@@ -278,17 +278,25 @@ Home Assistant activity logging added afterwards; it compiles but has not been c
    `X-PIN: 11` requests — 201 Created is the API accepting the reading — and `madavi -> HTTP 200`.
    The trimmed average was confirmed once more on live data: frames `3.6, 4.1, 4.2, 4.0, 4.5`
    reported **4.10**, against a plain mean of 4.08.
-7. **Home Assistant activity logging — partly done.** The three `homeassistant.action: logbook.log`
-   calls and the `log_activity` switch **compile clean**; nothing about their runtime behaviour has
-   been confirmed. To finish:
-   - tick *Allow the device to perform Home Assistant actions* on the ESPHome integration page for
-     this device — without it the calls are rejected and nothing appears, while uploads carry on
-     unaffected
-   - turn the `log_activity` switch on (it is `RESTORE_DEFAULT_OFF`)
-   - confirm three entries per cycle in the activity log: `Measurement cycle started`,
-     `Published to sensor.community`, `Published to madavi.de`
+7. **Home Assistant activity logging — working.** With `log_activity` on, each completed cycle
+   produces the three expected entries in the activity log: `Measurement cycle started`,
+   `Published to sensor.community`, `Published to madavi.de`. Two things had to be fixed first, and
+   either one alone produced exactly the same symptom — silence, with uploads carrying on normally:
+   - ~~*Allow the device to perform Home Assistant actions*~~ must be ticked under **Settings →
+     Devices & Services → ESPHome → Configure** on this device. Until it was, HA rejected every call,
+     raised a repair issue and logged `Service call logbook.log ... rejected`. Note the permission is
+     per device, not per action — it allows this device to call *any* HA action.
+   - ~~the entries need an `entity_id` belonging to the device~~ (`logbook_entity_id`, set to the
+     Sensor ID text sensor, confirmed as `sensor.airrohr_esphome_sensor_id`). The original calls
+     omitted it, so entries were filed under the generic `logbook` domain and could never appear on
+     the device page — only in the global Activity panel.
+
+   **Decided: left off.** At the default interval it would add roughly 1800 entries a day to the
+   recorder, for information the ESPHome log already carries. It is switched on only when there is a
+   reason to watch publishing happen, then switched back off — which is what `RESTORE_DEFAULT_OFF`
+   already gives on every reboot.
+
+   Still outstanding:
    - check the behaviour when the PM sensor yields nothing: the sensor.community entry is suppressed
      when both its payloads are empty, so a cold-start cycle should show the cycle-start and madavi
-     entries only
-   - then decide whether to leave it on. At the default interval it writes roughly 1800 entries a day
-     to the recorder, which is why it defaults to off.
+     entries only. Needs the switch turned on during a cold start to observe.

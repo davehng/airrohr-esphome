@@ -89,6 +89,28 @@ git submodule update --init
 a few cycles: each should report roughly five SDS011 samples. `docs/portingplan.md` describes a dry
 run against a local HTTP listener to inspect the exact payload first.
 
+### Activity logging in Home Assistant (optional)
+
+The **Log activity to Home Assistant** switch makes the device write an entry to Home Assistant's
+activity log when a measurement cycle starts and after each upload. It is **off by default**, and
+turning it on needs one change on the Home Assistant side:
+
+> **Settings → Devices & Services → ESPHome → Configure** on this device, then tick
+> **"Allow the device to perform Home Assistant actions"**.
+
+Without that permission Home Assistant rejects every call, raises a repair issue, and nothing
+appears in the activity log — while the uploads themselves carry on unaffected. Note the permission
+is granted per device rather than per action: it allows this device to call *any* Home Assistant
+action, so it is worth a moment's thought rather than a reflex tick.
+
+Two other things to know:
+
+- The entries are filed against the entity named in the `logbook_entity_id` substitution, which must
+  match a real entity of this device (check Developer Tools → States). Without a valid one they land
+  under the generic `logbook` domain and never show on the device's own page.
+- At the default 145 s interval this adds roughly 1 800 entries a day to the recorder, which is why
+  it defaults to off. Turn it on to watch the device, off the rest of the time.
+
 ## Status
 
 Working. Runs on a NodeMCU v2 (50.7% flash, 45.6% RAM) and publishes to the live Sensor.Community
@@ -111,6 +133,7 @@ GPL-3.0 sources, so it is a derivative work and carries the same terms.
 The original airRohr firmware is the work of Code for Stuttgart, Sensor.Community contributors and
 Dirk Mueller; the copy in [`src-original/`](src-original/) is theirs, unmodified.
 
-The ESPHome port and the documentation in this repository were written by
-**[Claude](https://claude.com/claude-code)** (Anthropic), working from the original firmware sources
-under the direction of the repository owner.
+The ESPHome port and the documentation in this repository were written by Dave Hng and
+**[Claude](https://claude.com/claude-code)** (Anthropic) together — Claude working from the original
+firmware sources, Dave directing the work, testing each change on the hardware, and writing and
+editing throughout.
