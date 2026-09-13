@@ -3,8 +3,10 @@
 > **Status: complete and live.** The port is in
 > [../src-esphome/airrohr.yaml](../src-esphome/airrohr.yaml), with
 > [../src-esphome/secrets.yaml.example](../src-esphome/secrets.yaml.example) alongside it. Every step
-> of [Verification](#verification) passes: it runs on hardware and publishes to the real
-> sensor.community and madavi endpoints, which accept the data (HTTP 201 and 200 respectively). See
+> of [Verification](#verification) passes for the port itself: it runs on hardware and publishes to
+> the real sensor.community and madavi endpoints, which accept the data (HTTP 201 and 200
+> respectively). The later Home Assistant activity-logging addition compiles but is not yet confirmed
+> at runtime — step 7. See
 > [Implementation notes](#implementation-notes) for what changed along the way and what is worth
 > watching in the long run.
 
@@ -88,8 +90,13 @@ captive portal), `captive_portal`, `logger`, `api`, `ota`, `web_server`, `http_r
   `disabled_by_default: true` — they still run (the payload's `signal` field reads `wifi_signal`),
   but Home Assistant does not record them unless enabled.
 
-**Switches** — `publish_sensor_community` and `publish_madavi`, template switches with
-`restore_mode: RESTORE_DEFAULT_ON`, optimistic. Each upload script checks its own switch.
+**Switches** — `publish_sensor_community` and `publish_madavi` (both `RESTORE_DEFAULT_ON`) plus
+`log_activity` (`RESTORE_DEFAULT_OFF`), all optimistic template switches. Each upload script checks
+its own switch. `log_activity` gates `logbook.log` calls to Home Assistant marking cycle start and each upload:
+ESPHome's own log lines are invisible to HA, and every numeric entity is excluded from the activity
+log for having a `unit_of_measurement`, so without these calls the device leaves no trace there. The
+calls need "Allow the device to perform Home Assistant actions" enabled on the ESPHome integration
+page, and they add roughly 1 800 activity entries a day at the default interval.
 
 **Globals** — `std::vector<float>` for PM2.5 and PM10 samples, a `bool collecting` gate, an
 `int last_sample_count`, and three `std::string` payloads staged by the cycle for `upload_all`.
@@ -235,9 +242,10 @@ Three further defects were found and fixed during a read-back of the generated f
 
 ## Verification
 
-**All six steps pass.** The port compiles, runs on hardware, and publishes accepted data to the live
+**Steps 1-6 pass.** The port compiles, runs on hardware, and publishes accepted data to the live
 endpoints. Each step below records the evidence rather than just the outcome. The weakest link is
-sea-level pressure, which has only been exercised at 0.1 m — see step 5.
+sea-level pressure, which has only been exercised at 0.1 m — see step 5. Step 7 covers the optional
+Home Assistant activity logging added afterwards; it compiles but has not been confirmed at runtime.
 
 1. ~~`esphome config src-esphome/airrohr.yaml`~~ — done, schema and substitutions resolve.
 2. ~~`esphome compile src-esphome/airrohr.yaml`~~ — done, builds clean at 50.7% flash / 45.6% RAM.
@@ -270,3 +278,17 @@ sea-level pressure, which has only been exercised at 0.1 m — see step 5.
    `X-PIN: 11` requests — 201 Created is the API accepting the reading — and `madavi -> HTTP 200`.
    The trimmed average was confirmed once more on live data: frames `3.6, 4.1, 4.2, 4.0, 4.5`
    reported **4.10**, against a plain mean of 4.08.
+7. **Home Assistant activity logging — partly done.** The three `homeassistant.action: logbook.log`
+   calls and the `log_activity` switch **compile clean**; nothing about their runtime behaviour has
+   been confirmed. To finish:
+   - tick *Allow the device to perform Home Assistant actions* on the ESPHome integration page for
+     this device — without it the calls are rejected and nothing appears, while uploads carry on
+     unaffected
+   - turn the `log_activity` switch on (it is `RESTORE_DEFAULT_OFF`)
+   - confirm three entries per cycle in the activity log: `Measurement cycle started`,
+     `Published to sensor.community`, `Published to madavi.de`
+   - check the behaviour when the PM sensor yields nothing: the sensor.community entry is suppressed
+     when both its payloads are empty, so a cold-start cycle should show the cycle-start and madavi
+     entries only
+   - then decide whether to leave it on. At the default interval it writes roughly 1800 entries a day
+     to the recorder, which is why it defaults to off.

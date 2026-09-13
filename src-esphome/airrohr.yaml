@@ -307,6 +307,18 @@ switch:
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
     entity_category: config
+  # Writes cycle/upload entries to Home Assistant's activity log via
+  # logbook.log. Defaults to off: at the standard interval it would add roughly
+  # 1800 entries a day to the recorder. Turn it on to watch the device, off the
+  # rest of the time. The ESPHome log is unaffected either way. Requires "Allow
+  # the device to perform Home Assistant actions" on the ESPHome integration
+  # page, otherwise the calls are silently rejected.
+  - platform: template
+    id: log_activity
+    name: "Log activity to Home Assistant"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
 
 button:
   # Handy when testing: run a full cycle now instead of waiting out the interval.
@@ -358,6 +370,15 @@ script:
           id(pm25_samples).clear();
           id(pm10_samples).clear();
           id(collecting) = false;
+      - if:
+          condition:
+            switch.is_on: log_activity
+          then:
+            - homeassistant.action:
+                action: logbook.log
+                data:
+                  name: ${friendly_name}
+                  message: "Measurement cycle started"
       - script.execute: sds_start
       # Warm-up: frames arrive but are deliberately ignored.
       - delay: ${warmup_time_s}s
@@ -512,6 +533,18 @@ script:
                 condition:
                   not:
                     script.is_running: post_sensor_community
+            # Only if something was actually sent — both payloads can be empty.
+            - if:
+                condition:
+                  and:
+                    - switch.is_on: log_activity
+                    - lambda: 'return !id(payload_sc_pm).empty() || !id(payload_sc_bme).empty();'
+                then:
+                  - homeassistant.action:
+                      action: logbook.log
+                      data:
+                        name: ${friendly_name}
+                        message: "Published to sensor.community"
       - if:
           condition:
             switch.is_on: publish_madavi
@@ -527,3 +560,12 @@ script:
                   then:
                     - lambda: |-
                         ESP_LOGI("airrohr", "madavi -> HTTP %d", response->status_code);
+            - if:
+                condition:
+                  switch.is_on: log_activity
+                then:
+                  - homeassistant.action:
+                      action: logbook.log
+                      data:
+                        name: ${friendly_name}
+                        message: "Published to madavi.de"
