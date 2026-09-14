@@ -6,8 +6,7 @@
 > of [Verification](#verification) passes for the port itself: it runs on hardware and publishes to
 > the real sensor.community and madavi endpoints, which accept the data (HTTP 201 and 200
 > respectively). The optional Home Assistant activity logging added afterwards works too — step 7.
-> See
-> [Implementation notes](#implementation-notes) for what changed along the way and what is worth
+> See [Implementation notes](#implementation-notes) for what changed along the way and what is worth
 > watching in the long run.
 
 ## Context
@@ -33,6 +32,15 @@ Checked against the ESPHome sources and docs, not assumed:
   `update_interval` sets the *sensor's own* working period (its firmware wakes ~30 s per period);
   `rx_only` and `update_interval` are mutually exclusive in the schema. So the component is used
   purely as a **frame parser** in continuous reporting mode, and the port drives start/stop itself.
+  - **Reconsidered later and rejected.** Letting the sensor duty-cycle itself would delete the
+    start/stop scripts, the warm-up delays, the sample vectors and the trimming lambda — roughly 80
+    lines. It was turned down because in working-period mode the sensor reports **one sample per
+    period**, so the trimmed mean and outlier rejection have nothing to operate on, and what reaches
+    sensor.community becomes a single instantaneous reading rather than a trimmed mean of five. That
+    is precisely the kind of difference this port exists to avoid. Two further points against: the
+    period is whole minutes only, so 145 s is not expressible; and the sensor's own 30 s warm-up
+    means *more* laser duty than the current scheme, not less (13.8% now, versus 25% at a 2-minute
+    period or 16.7% at three) — roughly 6.6 years of rated laser life against 3.7 or 5.5.
 - **airRohr's start/stop frames are reproducible verbatim from YAML.** `SDS_rawcmd()`
   ([utils.cpp:405-422](../src-original/airrohr-firmware/utils.cpp#L405-L422)) builds a 19-byte frame
   `AA B4 <h1> <h2> <h3> 00×10 FF FF <ck> AB` with `ck = h1+h2+h3-2`. `uart.write` sends these
@@ -92,11 +100,11 @@ captive portal), `captive_portal`, `logger`, `api`, `ota`, `web_server`, `http_r
 
 **Switches** — `publish_sensor_community` and `publish_madavi` (both `RESTORE_DEFAULT_ON`) plus
 `log_activity` (`RESTORE_DEFAULT_OFF`), all optimistic template switches. Each upload script checks
-its own switch. `log_activity` gates `logbook.log` calls to Home Assistant marking cycle start and each upload:
-ESPHome's own log lines are invisible to HA, and every numeric entity is excluded from the activity
-log for having a `unit_of_measurement`, so without these calls the device leaves no trace there. The
-calls need "Allow the device to perform Home Assistant actions" enabled on the ESPHome integration
-page, and they add roughly 1 800 activity entries a day at the default interval.
+its own switch. `log_activity` gates `logbook.log` calls to Home Assistant marking cycle start and
+each upload: ESPHome's own log lines are invisible to HA, and every numeric entity is excluded from
+the activity log for having a `unit_of_measurement`, so without these calls the device leaves no
+trace there. The calls need "Allow the device to perform Home Assistant actions" enabled on the
+ESPHome integration page, and they add roughly 1 800 activity entries a day at the default interval.
 
 **Globals** — `std::vector<float>` for PM2.5 and PM10 samples, a `bool collecting` gate, an
 `int last_sample_count`, and three `std::string` payloads staged by the cycle for `upload_all`.

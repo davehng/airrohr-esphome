@@ -44,6 +44,15 @@ of sensor readings: 5. Same key, same type, entirely different quantity, and the
 graphs it either way. This was kept deliberately, for a diagnostic endpoint only, and written down.
 The failure mode to avoid is doing it *without* noticing.
 
+**A log line is not observability.** Making the device announce itself in Home Assistant's activity
+log looked like it should follow from a device that already logs every cycle and every upload. It
+does not. `ESP_LOGI` output goes to ESPHome's own log stream and never reaches Home Assistant, and
+the entities that *do* update are excluded from the activity log by design — Home Assistant drops any
+sensor carrying a `unit_of_measurement` on the grounds that it changes too often to be worth
+recording. A fully working, thoroughly logged device produced not one line in the place it was being
+looked for. Before promising that something will be visible somewhere, find out what that particular
+surface actually displays.
+
 ## Validation and evidence
 
 **A test that could not have failed is not evidence.** The first trimmed-average check looked like a
@@ -76,6 +85,20 @@ it matches how the original firmware behaves, and it is harmless here because it
 fan is off. Written down as expected, it is a known characteristic; left undocumented, it is a bug
 someone will chase in six months.
 
+**Two independent gates, one symptom.** The activity-log entries were blocked by a missing
+`entity_id` *and* by a per-device permission Home Assistant requires before it will accept any action
+call. Either one alone produced exactly the same result — total silence, with every other function of
+the device working normally — so fixing the first changed nothing observable and looked like evidence
+the diagnosis had been wrong. When a feature produces no output at all, enumerate every gate between
+cause and effect before changing anything: "nothing happened" carries almost no information about
+which gate is shut.
+
+**One-way calls leave their evidence on the far side.** The device fires Home Assistant actions and
+gets no acknowledgement back, so no amount of device-side logging could ever show whether they
+arrived. The evidence was all on the receiving end — a repair issue, and a log line naming the
+rejected call and why. For any fire-and-forget integration, find out where the receiver records
+failures before you need it, rather than while debugging.
+
 ## Working from original source
 
 **Prefer the source to its documentation.** The upstream README states the configuration access point
@@ -107,7 +130,10 @@ a silent data loss discovered months later.
 accumulated a duplicated status banner, a stale "cannot be verified" claim that had since been
 verified, two lists that omitted later additions, and a cross-reference to behaviour that had been
 replaced. None were visible while editing a single section. A full read-through found eight in one
-pass — worth doing before anyone else relies on the document.
+pass — worth doing before anyone else relies on the document. It recurred immediately afterwards:
+striking one verification sub-item off left both the section preamble and the status banner still
+claiming the feature was unverified. Any fact worth stating in a summary is a fact that will go stale
+somewhere else.
 
 **Record the evidence, not just the verdict.** "Trimmed mean verified" is worth very little six months
 on. "Frames 4.8, 4.6, 4.8, 4.9, 6.7 → reported 4.83, plain mean would be 5.16" can be re-checked by
